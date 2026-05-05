@@ -1,0 +1,22 @@
+{
+  "name": "watch-store-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch --watch-path=src src/app.js",
+    "db:constraints": "node src/database/constraints.js",
+    "db:indexes": "node src/database/indexes.js",
+    "db:seed": "node src/database/seed.js",
+    "db:diagnostics": "node src/database/diagnostics.js",
+    "db:clear": "node src/database/clear.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "csv-parse": "^5.5.6",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "multer": "^2.1.1",
+    "neo4j-driver": "^5.27.0"
+  }
+}
