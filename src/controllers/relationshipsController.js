@@ -1,3 +1,4 @@
+import neo4j from 'neo4j-driver';
 import { runQuery, recordToObject, toNativeNumber } from '../config/neo4j.js';
 import { allowedRelationships, allowedLabels, relationshipSchemas } from '../models/graphSchema.js';
 
@@ -36,11 +37,24 @@ function convertProp(val) {
   return val;
 }
 
+function parseNonNegativeInt(value, fallback) {
+  const parsed = parseInt(String(value ?? ''), 10);
+  if (Number.isNaN(parsed)) return fallback;
+  return Math.max(0, parsed);
+}
+
 // GET /api/relationships
 export async function listRelationships(req, res) {
   try {
-    const { type, sourceLabel, targetLabel, limit = 20, skip = 0 } = req.query;
-    const params = { limit: parseInt(limit), skip: parseInt(skip) };
+    const { type, sourceLabel, targetLabel } = req.query;
+    const limit = Math.max(1, parseNonNegativeInt(req.query.limit, 20));
+    let skip = parseNonNegativeInt(req.query.skip, 0);
+    const page = parseNonNegativeInt(req.query.page, 0);
+    if (!Number.isNaN(page) && page > 0) {
+      skip = (page - 1) * limit;
+    }
+
+    const params = { limit: neo4j.int(limit), skip: neo4j.int(skip) };
     const conditions = [];
 
     if (type) {
@@ -72,17 +86,29 @@ export async function listRelationships(req, res) {
                 labels(tgt) AS tgtLabels,
                 tgt[head([k IN keys(tgt) WHERE k STARTS WITH 'id'])] AS tgtId
          ORDER BY elementId(r)
-         SKIP $skip LIMIT $limit`,
+         SKIP toInteger($skip) LIMIT toInteger($limit)`,
         params
       ),
       runQuery(
         `MATCH (src)-[r]->(tgt) ${whereClause} RETURN count(r) AS total`,
-        { type: params.type, sourceLabel: params.sourceLabel, targetLabel: params.targetLabel }
+        params
       ),
     ]);
 
     const relationships = dataResult.records.map(r => extractRelationship(r));
-    res.json({ data: relationships, total: toNativeNumber(countResult.records[0].get('total')) });
+    const total = toNativeNumber(countResult.records[0].get('total'));
+    const currentPage = page > 0 ? page : Math.floor(skip / limit) + 1;
+    res.json({
+      data: relationships,
+      total,
+      meta: {
+        page: currentPage,
+        limit,
+        skip,
+        total,
+        totalPages: Math.ceil(total / limit) || 0,
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

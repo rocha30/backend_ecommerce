@@ -1,11 +1,34 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { getHealth, getNeo4jHealth } from '../controllers/healthController.js';
-import { getProducts, getProductById, getProductRecommendations, getCategorias } from '../controllers/productsController.js';
+import {
+  getProducts,
+  getProductById,
+  getProductRecommendations,
+  getProductRecommendationsForUser,
+  getCategorias,
+  getProductReviews,
+  getProductRelated,
+} from '../controllers/productsController.js';
 import { getBrands, getBrandById, getBrandProducts } from '../controllers/brandsController.js';
 import { getConnectivity, getDiagnostics, getNodeCount, getLabelCounts, getRelationshipTypes } from '../controllers/graphController.js';
 import { importNodes, importRelationships } from '../controllers/importController.js';
-import { runQuery } from '../config/neo4j.js';
+import { runQueryEndpoint } from '../controllers/queryController.js';
+import { getRubricStatus } from '../controllers/rubricController.js';
+import {
+  recordProductView,
+  getCart,
+  postCartItem,
+  patchCartItem,
+  deleteCartItem,
+  clearCart,
+  getWishlistItems,
+  postWishlistItem,
+  deleteWishlistItem,
+  createOrder,
+  createReview,
+  getUserRecommendations,
+} from '../controllers/usersController.js';
 import {
   listNodes, getNodeByElementId, createNode,
   updateNodeProperties, bulkUpdateNodeProperties,
@@ -22,57 +45,40 @@ import {
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-// ── Cypher query runner (read-only, for the demo Consultas tab) ────────────
-function convertForJson(val) {
-  if (val === null || val === undefined) return null;
-  if (typeof val === 'object' && typeof val.toNumber === 'function') return val.toNumber();
-  if (typeof val === 'object' && val.toString && val.constructor?.name?.match(/Date|Time/)) return val.toString();
-  if (Array.isArray(val)) return val.map(convertForJson);
-  if (typeof val === 'object' && val.properties) {
-    const out = {};
-    for (const k of Object.keys(val.properties)) out[k] = convertForJson(val.properties[k]);
-    return out;
-  }
-  return val;
-}
-
-async function runCypherQuery(req, res) {
-  try {
-    const { cypher } = req.body;
-    if (!cypher || typeof cypher !== 'string') return res.status(400).json({ error: 'cypher requerido' });
-    // Block write operations — only MATCH/RETURN queries allowed here
-    const tokens = cypher.toUpperCase().split(/\s+|[^A-Z]/);
-    const writeKeywords = ['DELETE', 'DETACH', 'DROP', 'CREATE', 'MERGE', 'REMOVE'];
-    const hasWrite = writeKeywords.some(kw => tokens.includes(kw));
-    if (hasWrite) {
-      return res.status(403).json({ error: 'Solo se permiten consultas de lectura (MATCH/RETURN)' });
-    }
-    const result = await runQuery(cypher);
-    const data = result.records.map(r => {
-      const obj = {};
-      for (const key of r.keys) obj[key] = convertForJson(r.get(key));
-      return obj;
-    });
-    res.json({ data });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-}
-
 // ── Health ─────────────────────────────────────────────────────────────────
 router.get('/health', getHealth);
 router.get('/health/neo4j', getNeo4jHealth);
 
-// ── Products (store) ───────────────────────────────────────────────────────
+// ── Rubric (opcional) ───────────────────────────────────────────────────────
+router.get('/rubric/status', getRubricStatus);
+
+// ── Products — rutas estáticas antes de /products/:id ───────────────────────
 router.get('/products', getProducts);
 router.get('/products/categorias', getCategorias);
-router.get('/products/:id', getProductById);
+router.get('/products/recommendations', getProductRecommendationsForUser);
+router.get('/products/:id/reviews', getProductReviews);
+router.get('/products/:id/related', getProductRelated);
 router.get('/products/:id/recommendations', getProductRecommendations);
+router.get('/products/:id', getProductById);
 
-// ── Brands (store) ─────────────────────────────────────────────────────────
+// ── Brands ───────────────────────────────────────────────────────────────────
 router.get('/brands', getBrands);
 router.get('/brands/:id', getBrandById);
 router.get('/brands/:id/products', getBrandProducts);
+
+// ── Users (carrito, wishlist, pedidos, tracking) ────────────────────────────
+router.post('/users/:idUsuario/views/:idProducto', recordProductView);
+router.get('/users/:idUsuario/cart', getCart);
+router.delete('/users/:idUsuario/cart/items', clearCart);
+router.post('/users/:idUsuario/cart/items', postCartItem);
+router.patch('/users/:idUsuario/cart/items/:idProducto', patchCartItem);
+router.delete('/users/:idUsuario/cart/items/:idProducto', deleteCartItem);
+router.get('/users/:idUsuario/wishlist/items', getWishlistItems);
+router.post('/users/:idUsuario/wishlist/items', postWishlistItem);
+router.delete('/users/:idUsuario/wishlist/items/:idProducto', deleteWishlistItem);
+router.post('/users/:idUsuario/orders', createOrder);
+router.post('/users/:idUsuario/reviews', createReview);
+router.get('/users/:idUsuario/recommendations', getUserRecommendations);
 
 // ── Graph diagnostics ──────────────────────────────────────────────────────
 router.get('/graph/diagnostics/connectivity', getConnectivity);
@@ -85,10 +91,10 @@ router.get('/graph/relationships/types', getRelationshipTypes);
 router.post('/import/csv/nodes', upload.single('file'), importNodes);
 router.post('/import/csv/relationships', upload.single('file'), importRelationships);
 
-// ── Cypher demo queries ────────────────────────────────────────────────────
-router.post('/query', runCypherQuery);
+// ── Cypher / presets (POST body: { preset } o { cypher }) ───────────────────
+router.post('/query', runQueryEndpoint);
 
-// ── Nodes CRUD — bulk routes before /:elementId to avoid routing conflicts ─
+// ── Nodes CRUD — bulk routes before /:elementId ────────────────────────────
 router.get('/nodes', listNodes);
 router.post('/nodes', createNode);
 router.patch('/nodes/bulk/properties', bulkUpdateNodeProperties);
@@ -99,7 +105,7 @@ router.patch('/nodes/:elementId/properties', updateNodeProperties);
 router.delete('/nodes/:elementId/properties', removeNodeProperties);
 router.delete('/nodes/:elementId', deleteNode);
 
-// ── Relationships CRUD — bulk routes before /:elementId ───────────────────
+// ── Relationships CRUD — bulk routes before /:elementId ─────────────────────
 router.get('/relationships', listRelationships);
 router.post('/relationships', createRelationship);
 router.patch('/relationships/bulk/properties', bulkUpdateRelationshipProperties);

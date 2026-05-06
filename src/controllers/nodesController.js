@@ -1,3 +1,4 @@
+import neo4j from 'neo4j-driver';
 import { runQuery, recordToObject, toNativeNumber } from '../config/neo4j.js';
 import { allowedLabels, nodeSchemas } from '../models/graphSchema.js';
 import { validateProperties } from '../utils/typeValidation.js';
@@ -14,11 +15,24 @@ function extractNode(record) {
   };
 }
 
+function parseNonNegativeInt(value, fallback) {
+  const parsed = parseInt(String(value ?? ''), 10);
+  if (Number.isNaN(parsed)) return fallback;
+  return Math.max(0, parsed);
+}
+
 // GET /api/nodes
 export async function listNodes(req, res) {
   try {
-    const { label, search, limit = 20, skip = 0 } = req.query;
-    const params = { limit: parseInt(limit), skip: parseInt(skip) };
+    const { label, search } = req.query;
+    const limit = Math.max(1, parseNonNegativeInt(req.query.limit, 20));
+    let skip = parseNonNegativeInt(req.query.skip, 0);
+    const page = parseNonNegativeInt(req.query.page, 0);
+    if (!Number.isNaN(page) && page > 0) {
+      skip = (page - 1) * limit;
+    }
+
+    const params = { limit: neo4j.int(limit), skip: neo4j.int(skip) };
     const conditions = [];
 
     let matchClause = 'MATCH (n)';
@@ -41,7 +55,7 @@ export async function listNodes(req, res) {
         `${matchClause} ${whereClause}
          RETURN n, elementId(n) AS eid, labels(n) AS lbls
          ORDER BY elementId(n)
-         SKIP $skip LIMIT $limit`,
+         SKIP toInteger($skip) LIMIT toInteger($limit)`,
         params
       ),
       runQuery(
@@ -51,7 +65,19 @@ export async function listNodes(req, res) {
     ]);
 
     const nodes = dataResult.records.map(r => extractNode(r));
-    res.json({ data: nodes, total: toNativeNumber(countResult.records[0].get('total')) });
+    const total = toNativeNumber(countResult.records[0].get('total'));
+    const currentPage = page > 0 ? page : Math.floor(skip / limit) + 1;
+    res.json({
+      data: nodes,
+      total,
+      meta: {
+        page: currentPage,
+        limit,
+        skip,
+        total,
+        totalPages: Math.ceil(total / limit) || 0,
+      },
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

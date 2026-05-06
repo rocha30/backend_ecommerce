@@ -5,7 +5,10 @@ import { runDiagnostics } from '../database/diagnostics.js';
 export async function getConnectivity(req, res) {
   try {
     const result = await checkConnectivity();
-    res.json(result);
+    res.json({
+      ...result,
+      isolatedCount: result.isolatedNodeCount ?? result.isolatedCount,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -23,7 +26,14 @@ export async function getDiagnostics(req, res) {
 export async function getNodeCount(req, res) {
   try {
     const result = await runQuery('MATCH (n) RETURN count(n) AS totalNodos');
-    res.json({ totalNodos: toNativeNumber(result.records[0].get('totalNodos')) });
+    const total = toNativeNumber(result.records[0].get('totalNodos'));
+    res.json({
+      totalNodos: total,
+      count: total,
+      total,
+      nodeCount: total,
+      nodes: total,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -38,7 +48,12 @@ export async function getLabelCounts(req, res) {
       label: r.get('label'),
       total: toNativeNumber(r.get('total')),
     }));
-    res.json({ data: labels });
+    res.json({
+      data: labels,
+      labels,
+      items: labels,
+      totalLabels: labels.length,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -53,7 +68,12 @@ export async function getRelationshipTypes(req, res) {
       tipoRelacion: r.get('tipoRelacion'),
       total: toNativeNumber(r.get('total')),
     }));
-    res.json({ data: types });
+    const totalRelationships = types.reduce((s, t) => s + t.total, 0);
+    res.json({
+      data: types,
+      types,
+      totalRelationships,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
