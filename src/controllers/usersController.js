@@ -13,6 +13,13 @@ function bodyQty(body, fallback = 1) {
   return Number.isNaN(n) ? fallback : Math.max(1, n);
 }
 
+function normalizeUserId(rawUserId) {
+  const userId = String(rawUserId || '').trim();
+  const m = /^USR-(\d{1,5})$/i.exec(userId);
+  if (!m) return userId;
+  return `USR-${m[1].padStart(5, '0')}`;
+}
+
 async function ensureUsuario(userId) {
   const r = await runQuery('MATCH (u:Usuario {idUsuario: $userId}) RETURN u', { userId });
   return r.records.length > 0;
@@ -36,15 +43,21 @@ async function getOrCreateActiveCart(userId) {
   const cartId = `CART-API-${userId.replace(/[^A-Za-z0-9-]/g, '')}`;
   await runQuery(
     `MATCH (u:Usuario {idUsuario: $userId})
-     CREATE (c:Carrito {
-       idCarrito: $cartId,
-       fechaCreacion: datetime(),
-       fechaActualizacion: datetime(),
-       estado: 'activo',
-       cantidadItems: 0,
-       subtotal: 0.0
-     })
-     CREATE (u)-[:POSEE_CARRITO {fechaCreacion: datetime(), activo: true, origen: 'api'}]->(c)
+     MERGE (c:Carrito {idCarrito: $cartId})
+     ON CREATE SET
+       c.fechaCreacion = datetime(),
+       c.fechaActualizacion = datetime(),
+       c.estado = 'activo',
+       c.cantidadItems = 0,
+       c.subtotal = 0.0
+     ON MATCH SET
+       c.fechaActualizacion = datetime(),
+       c.estado = 'activo',
+       c.cantidadItems = coalesce(c.cantidadItems, 0),
+       c.subtotal = coalesce(c.subtotal, 0.0)
+     MERGE (u)-[pc:POSEE_CARRITO]->(c)
+     ON CREATE SET pc.fechaCreacion = datetime(), pc.activo = true, pc.origen = 'api'
+     ON MATCH SET pc.activo = true
      RETURN c`,
     { userId, cartId }
   );
@@ -97,8 +110,21 @@ function cartItemsPayload(records) {
       quantity: cantidad,
       precioUnitario,
       descuento,
+      // Keep nested object and expose flat fields for frontend compatibility.
       product,
+      producto: product,
+      id: product.id,
       idProducto: pr.idProducto,
+      name: product.name,
+      nombre: product.nombre,
+      image: product.image,
+      price: product.price,
+      precio: product.precio,
+      originalPrice: product.originalPrice,
+      precioOriginal: product.precioOriginal,
+      discount: product.discount,
+      categoria: product.categoria,
+      marcaNombre: product.marcaNombre,
     };
   });
 
@@ -108,7 +134,8 @@ function cartItemsPayload(records) {
 
 export async function recordProductView(req, res) {
   try {
-    const { idUsuario, idProducto } = req.params;
+    const { idProducto } = req.params;
+    const idUsuario = normalizeUserId(req.params.idUsuario);
     const seconds = Number(req.body?.secondsOnPage ?? req.body?.seconds ?? 0);
 
     if (!(await ensureUsuario(idUsuario))) {
@@ -132,7 +159,7 @@ export async function recordProductView(req, res) {
 
 export async function getCart(req, res) {
   try {
-    const { idUsuario } = req.params;
+    const idUsuario = normalizeUserId(req.params.idUsuario);
     if (!(await ensureUsuario(idUsuario))) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
@@ -165,7 +192,7 @@ export async function getCart(req, res) {
 
 export async function postCartItem(req, res) {
   try {
-    const { idUsuario } = req.params;
+    const idUsuario = normalizeUserId(req.params.idUsuario);
     const pid = bodyProductId(req.body);
     const addQty = bodyQty(req.body, 1);
 
@@ -206,7 +233,8 @@ export async function postCartItem(req, res) {
 
 export async function patchCartItem(req, res) {
   try {
-    const { idUsuario, idProducto } = req.params;
+    const { idProducto } = req.params;
+    const idUsuario = normalizeUserId(req.params.idUsuario);
     const qty = bodyQty(req.body, 1);
 
     if (!(await ensureUsuario(idUsuario))) {
@@ -240,7 +268,8 @@ export async function patchCartItem(req, res) {
 
 export async function deleteCartItem(req, res) {
   try {
-    const { idUsuario, idProducto } = req.params;
+    const { idProducto } = req.params;
+    const idUsuario = normalizeUserId(req.params.idUsuario);
     if (!(await ensureUsuario(idUsuario))) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
@@ -269,7 +298,7 @@ export async function deleteCartItem(req, res) {
 
 export async function clearCart(req, res) {
   try {
-    const { idUsuario } = req.params;
+    const idUsuario = normalizeUserId(req.params.idUsuario);
     if (!(await ensureUsuario(idUsuario))) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
@@ -299,7 +328,7 @@ export async function clearCart(req, res) {
 
 export async function getWishlistItems(req, res) {
   try {
-    const { idUsuario } = req.params;
+    const idUsuario = normalizeUserId(req.params.idUsuario);
     if (!(await ensureUsuario(idUsuario))) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
@@ -328,7 +357,7 @@ export async function getWishlistItems(req, res) {
 
 export async function postWishlistItem(req, res) {
   try {
-    const { idUsuario } = req.params;
+    const idUsuario = normalizeUserId(req.params.idUsuario);
     const pid = bodyProductId(req.body);
     if (!pid) return res.status(400).json({ error: 'idProducto requerido' });
     if (!(await ensureUsuario(idUsuario))) {
@@ -357,7 +386,8 @@ export async function postWishlistItem(req, res) {
 
 export async function deleteWishlistItem(req, res) {
   try {
-    const { idUsuario, idProducto } = req.params;
+    const { idProducto } = req.params;
+    const idUsuario = normalizeUserId(req.params.idUsuario);
     if (!(await ensureUsuario(idUsuario))) {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
@@ -376,7 +406,7 @@ export async function deleteWishlistItem(req, res) {
 
 export async function createOrder(req, res) {
   try {
-    const { idUsuario } = req.params;
+    const idUsuario = normalizeUserId(req.params.idUsuario);
     const direccion = req.body?.direccionEnvio ?? req.body?.address ?? 'Sin dirección';
 
     if (!(await ensureUsuario(idUsuario))) {
@@ -447,7 +477,7 @@ export async function createOrder(req, res) {
 
 export async function createReview(req, res) {
   try {
-    const { idUsuario } = req.params;
+    const idUsuario = normalizeUserId(req.params.idUsuario);
     const pid = bodyProductId(req.body);
     const calificacion = parseInt(req.body?.calificacion ?? req.body?.rating ?? 5, 10);
     const titulo = req.body?.titulo ?? req.body?.title ?? 'Reseña';
@@ -488,6 +518,6 @@ export async function createReview(req, res) {
 }
 
 export async function getUserRecommendations(req, res) {
-  req.query = { ...req.query, userId: req.params.idUsuario };
+  req.query = { ...req.query, userId: normalizeUserId(req.params.idUsuario) };
   return getProductRecommendationsForUser(req, res);
 }
